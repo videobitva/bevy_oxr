@@ -16,19 +16,24 @@ use bevy_mod_xr::{
 use openxr::Posef;
 
 //exernal api
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct XrTrackedStage;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct XrTrackedLocalFloor;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct XrTrackedView;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct XrTrackedLeftGrip;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct XrTrackedRightGrip;
 
 pub struct TrackingUtilitiesPlugin;
@@ -252,12 +257,12 @@ fn suggest_action_bindings(
 ) {
     bindings.send(OxrSuggestActionBinding {
         action: actions.left.as_raw(),
-        interaction_profile: "/interaction_profiles/oculus/touch_controller".into(),
+        interaction_profile: "/interaction_profiles/valve/index_controller".into(),
         bindings: vec!["/user/hand/left/input/grip/pose".into()],
     });
     bindings.send(OxrSuggestActionBinding {
         action: actions.right.as_raw(),
-        interaction_profile: "/interaction_profiles/oculus/touch_controller".into(),
+        interaction_profile: "/interaction_profiles/valve/index_controller".into(),
         bindings: vec!["/user/hand/right/input/grip/pose".into()],
     });
 }
