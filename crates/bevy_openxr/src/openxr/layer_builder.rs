@@ -9,7 +9,7 @@ use crate::resources::*;
 use crate::spaces::OxrSpaceExt as _;
 
 pub trait LayerProvider {
-    fn get<'a>(&'a self, world: &'a World) -> Option<Box<dyn CompositionLayer + '_>>;
+    fn get<'a>(&'a self, world: &'a World) -> Option<Box<dyn CompositionLayer<'a> + 'a>>;
 }
 
 pub struct ProjectionLayer;
@@ -37,14 +37,14 @@ impl LayerProvider for ProjectionLayer {
         Some(Box::new(
             CompositionLayerProjection::new()
                 .layer_flags(CompositionLayerFlags::BLEND_TEXTURE_SOURCE_ALPHA)
-                .space(&stage)
+                .space(stage)
                 .views(&[
                     CompositionLayerProjectionView::new()
                         .pose(openxr_views.0[0].pose)
                         .fov(openxr_views.0[0].fov)
                         .sub_image(
                             SwapchainSubImage::new()
-                                .swapchain(&swapchain)
+                                .swapchain(swapchain)
                                 .image_array_index(0)
                                 .image_rect(rect),
                         ),
@@ -53,7 +53,7 @@ impl LayerProvider for ProjectionLayer {
                         .fov(openxr_views.0[1].fov)
                         .sub_image(
                             SwapchainSubImage::new()
-                                .swapchain(&swapchain)
+                                .swapchain(swapchain)
                                 .image_array_index(1)
                                 .image_rect(rect),
                         ),
@@ -63,7 +63,7 @@ impl LayerProvider for ProjectionLayer {
 }
 
 impl LayerProvider for PassthroughLayer {
-    fn get<'a>(&'a self, world: &'a World) -> Option<Box<dyn CompositionLayer + '_>> {
+    fn get(&self, world: &World) -> Option<Box<dyn CompositionLayer>> {
         Some(Box::new(
             CompositionLayerPassthrough::new()
                 .layer_handle(world.get_resource::<OxrPassthroughLayer>()?)
@@ -117,7 +117,7 @@ impl<'a> SwapchainSubImage<'a> {
     }
 }
 
-impl<'a> Default for SwapchainSubImage<'a> {
+impl Default for SwapchainSubImage<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -165,11 +165,15 @@ impl<'a> CompositionLayerProjectionView<'a> {
         self
     }
 }
-impl<'a> Default for CompositionLayerProjectionView<'a> {
+impl Default for CompositionLayerProjectionView<'_> {
     fn default() -> Self {
         Self::new()
     }
 }
+/// # Safety
+/// the header function must return a ref to a valid Composition Layer struct. 
+/// it has to use `repr(C)` and it has to follow the shape of a Composition Layer struct from the
+/// OpenXR specification
 pub unsafe trait CompositionLayer<'a> {
     fn swapchain(&self) -> Option<&'a OxrSwapchain>;
     fn header(&self) -> &sys::CompositionLayerBaseHeader;
@@ -227,7 +231,7 @@ unsafe impl<'a> CompositionLayer<'a> for CompositionLayerProjection<'a> {
         unsafe { mem::transmute(&self.inner) }
     }
 }
-impl<'a> Default for CompositionLayerProjection<'a> {
+impl Default for CompositionLayerProjection<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -235,9 +239,15 @@ impl<'a> Default for CompositionLayerProjection<'a> {
 pub struct CompositionLayerPassthrough {
     inner: sys::CompositionLayerPassthroughFB,
 }
+impl Default for CompositionLayerPassthrough {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CompositionLayerPassthrough {
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             inner: openxr::sys::CompositionLayerPassthroughFB {
                 ty: openxr::sys::CompositionLayerPassthroughFB::TYPE,

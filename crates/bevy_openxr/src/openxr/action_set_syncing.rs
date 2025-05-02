@@ -1,6 +1,5 @@
-use crate::session::OxrSession;
+use crate::{openxr_session_running, session::OxrSession};
 use bevy::prelude::*;
-use bevy_mod_xr::session::session_running;
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct OxrActionSetSyncSet;
@@ -10,7 +9,9 @@ impl Plugin for OxrActionSyncingPlugin {
         app.add_event::<OxrSyncActionSet>();
         app.add_systems(
             PreUpdate,
-            sync_sets.in_set(OxrActionSetSyncSet).run_if(session_running), // .in_set(OxrPreUpdateSet::SyncActions),
+            sync_sets
+                .in_set(OxrActionSetSyncSet)
+                .run_if(openxr_session_running),
         );
     }
 }
@@ -21,7 +22,6 @@ fn sync_sets(session: Res<OxrSession>, mut events: EventReader<OxrSyncActionSet>
         .map(|v| &v.0)
         .map(openxr::ActiveActionSet::new)
         .collect::<Vec<_>>();
-
     if sets.is_empty() {
         return;
     }

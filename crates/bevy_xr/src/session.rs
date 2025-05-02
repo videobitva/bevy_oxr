@@ -1,8 +1,11 @@
+use std::convert::identity;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use bevy::app::{AppExit, MainScheduleOrder};
+use bevy::ecs::component::HookContext;
 use bevy::ecs::schedule::ScheduleLabel;
+use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp, RenderSet};
@@ -44,9 +47,13 @@ pub struct XrPostSessionBegin;
 #[derive(Event, Clone, Copy, Default)]
 pub struct XrEndSessionEvent;
 
-/// Schedule thats rna whenever the XrSession is about to end
+/// Schedule thats ran whenever the XrSession is about to end
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Hash, ScheduleLabel)]
 pub struct XrPreSessionEnd;
+
+/// Event that is emitted when the XrSession is fully destroyed
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Hash, Event)]
+pub struct XrSessionDestroyedEvent;
 
 /// Event sent to backends to request the [`XrState`] proceed to [`Exiting`](XrState::Exiting) and for the session to be exited. Can be called at any time a session exists.
 #[derive(Event, Clone, Copy, Default)]
@@ -84,7 +91,28 @@ pub struct XrRootTransform(pub GlobalTransform);
 
 /// Component used to specify the entity we should use as the tracking root.
 #[derive(Component)]
+#[require(Transform, Visibility)]
 pub struct XrTrackingRoot;
+#[derive(Resource)]
+struct TrackingRootRes(Entity);
+
+/// Makes the entity a child of the XrTrackingRoot if the entity has no parent
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Reflect, Debug, Default, Component)]
+#[component(on_add = on_tracker_add)]
+pub struct XrTracker;
+fn on_tracker_add(mut world: DeferredWorld, HookContext { entity, .. }: HookContext) {
+    if world
+        .entity(entity)
+        .get_components::<Has<Children>>()
+        .is_some_and(identity)
+    {
+        return;
+    }
+    let Some(root) = world.get_resource::<TrackingRootRes>().map(|r| r.0) else {
+        return;
+    };
+    world.commands().entity(root).add_child(entity);
+}
 
 pub struct XrSessionPlugin {
     pub auto_handle: bool,
@@ -102,6 +130,7 @@ impl Plugin for XrSessionPlugin {
             .add_event::<XrRequestExitEvent>()
             .add_event::<XrStateChanged>()
             .add_event::<XrSessionCreatedEvent>()
+            .add_event::<XrSessionDestroyedEvent>()
             .init_schedule(XrSessionCreated)
             .init_schedule(XrPreDestroySession)
             .init_schedule(XrPostSessionBegin)
@@ -121,10 +150,12 @@ impl Plugin for XrSessionPlugin {
             .add_systems(
                 XrFirst,
                 exits_session_on_app_exit
-                    .run_if(on_event::<AppExit>())
+                    .run_if(on_event::<AppExit>)
                     .run_if(session_created)
                     .in_set(XrHandleEvents::ExitEvents),
             );
+        let root = app.world_mut().spawn(XrTrackingRoot).id();
+        app.world_mut().insert_resource(TrackingRootRes(root));
         app.world_mut()
             .resource_mut::<MainScheduleOrder>()
             .labels
@@ -153,7 +184,7 @@ impl Plugin for XrSessionPlugin {
             XrFirst,
             exits_session_on_app_exit
                 .before(XrHandleEvents::ExitEvents)
-                .run_if(on_event::<AppExit>().and_then(session_running)),
+                .run_if(on_event::<AppExit>.and(session_running)),
         );
 
         let render_app = app.sub_app_mut(RenderApp);
@@ -185,7 +216,7 @@ impl Plugin for XrSessionPlugin {
 }
 
 fn exits_session_on_app_exit(mut request_exit: EventWriter<XrRequestExitEvent>) {
-    request_exit.send_default();
+    request_exit.write_default();
 }
 
 /// Event sent by backends whenever [`XrState`] is changed.
@@ -227,18 +258,18 @@ pub fn auto_handle_session(
         match state {
             XrState::Available => {
                 if !*no_auto_restart {
-                    create_session.send_default();
+                    create_session.write_default();
                 }
             }
             XrState::Ready => {
-                begin_session.send_default();
+                begin_session.write_default();
             }
             XrState::Stopping => {
-                end_session.send_default();
+                end_session.write_default();
             }
             XrState::Exiting { should_restart } => {
                 *no_auto_restart = !should_restart;
-                destroy_session.send_default();
+                destroy_session.write_default();
             }
             _ => (),
         }
@@ -249,7 +280,7 @@ pub fn update_root_transform(
     mut root_transform: ResMut<XrRootTransform>,
     root: Query<&GlobalTransform, With<XrTrackingRoot>>,
 ) {
-    let Ok(transform) = root.get_single() else {
+    let Ok(transform) = root.single() else {
         return;
     };
 
@@ -266,6 +297,7 @@ pub fn status_changed_to(
 }
 
 /// A [`Condition`](bevy::ecs::schedule::Condition) system that says if the XR session is available. Returns true as long as [`XrState`] exists and isn't [`Unavailable`](XrStatus::Unavailable).
+/// When using backend specific resources use the backend specific condition
 pub fn session_available(status: Option<Res<XrState>>) -> bool {
     status.is_some_and(|s| *s != XrState::Unavailable)
 }
@@ -282,7 +314,8 @@ pub fn session_ready_or_running(status: Option<Res<XrState>>) -> bool {
     matches!(status.as_deref(), Some(XrState::Ready | XrState::Running))
 }
 
-/// A [`Condition`](bevy::ecs::schedule::Condition) system that says if the XR session is running
+/// A [`Condition`](bevy::ecs::schedule::Condition) system that says if the XR session is running.
+/// When using backend specific resources use the backend specific condition
 pub fn session_running(status: Option<Res<XrState>>) -> bool {
     matches!(status.as_deref(), Some(XrState::Running))
 }

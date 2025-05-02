@@ -1,8 +1,8 @@
 use std::{any::TypeId, marker::PhantomData};
 
 use bevy::app::{App, Plugin};
-use bevy::ecs::system::Resource;
 use bevy::math::Vec2;
+use bevy::prelude::Resource;
 
 pub struct ActionPlugin<A: Action>(PhantomData<A>);
 
@@ -94,11 +94,11 @@ impl<A: Action<ActionType = bool>> ActionState<A> {
     }
 
     pub fn just_pressed(&self) -> bool {
-        self.previous_state == false && self.current_state == true
+        !self.previous_state && self.current_state
     }
 
     pub fn just_released(&self) -> bool {
-        self.previous_state == true && self.current_state == false
+        self.previous_state && !self.current_state
     }
 
     pub fn press(&mut self) {

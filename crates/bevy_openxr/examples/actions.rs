@@ -21,8 +21,8 @@ fn main() {
         .add_systems(Update, handle_flight_input)
         // Realtime lighting is expensive, use ambient light instead
         .insert_resource(AmbientLight {
-            color: Default::default(),
             brightness: 500.0,
+            ..AmbientLight::default()
         })
         .run();
 }
@@ -34,24 +34,22 @@ fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // circular base
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(Circle::new(4.0)),
-        material: materials.add(Color::WHITE),
-        transform: Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(meshes.add(Circle::new(4.0))),
+        MeshMaterial3d(materials.add(Color::WHITE)),
+        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+    ));
     // cube
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        material: materials.add(Color::srgb_u8(124, 144, 255)),
-        transform: Transform::from_xyz(0.0, 0.5, 0.0),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
+        Transform::from_xyz(0.0, 0.5, 0.0),
+    ));
 
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
 }
 
 #[derive(Component)]
@@ -134,18 +132,19 @@ fn handle_flight_input(
                 //hard code speed for now
                 let speed = 5.0;
 
-                let root = oxr_root.get_single_mut();
+                let root = oxr_root.single_mut();
                 match root {
                     Ok(mut root_position) => {
                         //lets assume HMD based direction for now
                         let view = views.first();
                         match view {
                             Some(v) => {
-                                let reference_quat = v.pose.orientation.to_quat();
+                                let reference_quat =
+                                    root_position.rotation * v.pose.orientation.to_quat();
                                 let locomotion_vector = reference_quat.mul_vec3(input_vector);
 
                                 root_position.translation +=
-                                    locomotion_vector * speed * time.delta_seconds();
+                                    locomotion_vector * speed * time.delta_secs();
                             }
                             None => return,
                         }

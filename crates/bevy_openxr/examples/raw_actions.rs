@@ -5,15 +5,14 @@ use bevy_mod_openxr::{
     action_binding::{OxrSendActionBindings, OxrSuggestActionBinding},
     action_set_attaching::OxrAttachActionSet,
     action_set_syncing::{OxrActionSetSyncSet, OxrSyncActionSet},
-    add_xr_plugins,
+    add_xr_plugins, openxr_session_running,
     resources::OxrInstance,
     session::OxrSession,
     spaces::OxrSpaceExt,
 };
 use bevy_mod_xr::{
-    session::{session_available, session_running, XrSessionCreated, XrTrackingRoot},
+    session::{session_available, XrSessionCreated},
     spaces::XrSpace,
-    types::XrPose,
 };
 use openxr::Posef;
 
@@ -26,7 +25,7 @@ fn main() {
         PreUpdate,
         sync_actions
             .before(OxrActionSetSyncSet)
-            .run_if(session_running),
+            .run_if(openxr_session_running),
     );
     app.add_systems(OxrSendActionBindings, suggest_action_bindings);
     app.add_systems(Startup, create_actions.run_if(session_available));
@@ -36,7 +35,7 @@ fn main() {
 }
 
 fn attach_set(actions: Res<ControllerActions>, mut attach: EventWriter<OxrAttachActionSet>) {
-    attach.send(OxrAttachActionSet(actions.set.clone()));
+    attach.write(OxrAttachActionSet(actions.set.clone()));
 }
 
 #[derive(Resource)]
@@ -46,7 +45,7 @@ struct ControllerActions {
     right: openxr::Action<Posef>,
 }
 fn sync_actions(actions: Res<ControllerActions>, mut sync: EventWriter<OxrSyncActionSet>) {
-    sync.send(OxrSyncActionSet(actions.set.clone()));
+    sync.write(OxrSyncActionSet(actions.set.clone()));
 }
 /// set up a simple 3D scene
 fn setup(
@@ -55,43 +54,40 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // circular base
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(Circle::new(4.0)),
-        material: materials.add(Color::WHITE),
-        transform: Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(meshes.add(Circle::new(4.0))),
+        MeshMaterial3d(materials.add(Color::WHITE)),
+        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+    ));
     // cube
-    commands.spawn(PbrBundle {
-        mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        material: materials.add(Color::srgb_u8(124, 144, 255)),
-        transform: Transform::from_xyz(0.0, 0.5, 0.0),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
+        Transform::from_xyz(0.0, 0.5, 0.0),
+    ));
     // light
-    commands.spawn(PointLightBundle {
-        point_light: PointLight {
+    commands.spawn((
+        PointLight {
             shadows_enabled: true,
             ..default()
         },
-        transform: Transform::from_xyz(4.0, 8.0, 4.0),
-        ..default()
-    });
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
+        Transform::from_xyz(4.0, 8.0, 4.0),
+    ));
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
 }
 fn suggest_action_bindings(
     actions: Res<ControllerActions>,
     mut bindings: EventWriter<OxrSuggestActionBinding>,
 ) {
-    bindings.send(OxrSuggestActionBinding {
+    bindings.write(OxrSuggestActionBinding {
         action: actions.left.as_raw(),
         interaction_profile: "/interaction_profiles/oculus/touch_controller".into(),
         bindings: vec!["/user/hand/left/input/grip/pose".into()],
     });
-    bindings.send(OxrSuggestActionBinding {
+    bindings.write(OxrSuggestActionBinding {
         action: actions.right.as_raw(),
         interaction_profile: "/interaction_profiles/oculus/touch_controller".into(),
         bindings: vec!["/user/hand/right/input/grip/pose".into()],
@@ -112,7 +108,6 @@ fn create_actions(instance: Res<OxrInstance>, mut cmds: Commands) {
 fn spawn_hands(
     actions: Res<ControllerActions>,
     mut cmds: Commands,
-    root: Query<Entity, With<XrTrackingRoot>>,
     session: Res<OxrSession>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -130,34 +125,20 @@ fn spawn_hands(
             .unwrap(),
     );
     let right_space = session
-        .create_action_space(&actions.right, openxr::Path::NULL, XrPose::IDENTITY)
+        .create_action_space(&actions.right, openxr::Path::NULL, Isometry3d::IDENTITY)
         .unwrap();
-    let left = cmds
-        .spawn((
-            PbrBundle {
-                mesh: meshes.add(Cuboid::new(0.1, 0.1, 0.05)),
-                material: materials.add(Color::srgb_u8(124, 144, 255)),
-                transform: Transform::from_xyz(0.0, 0.5, 0.0),
-                ..default()
-            },
-            left_space,
-            Controller,
-        ))
-        .id();
-    let right = cmds
-        .spawn((
-            PbrBundle {
-                mesh: meshes.add(Cuboid::new(0.1, 0.1, 0.05)),
-                material: materials.add(Color::srgb_u8(124, 144, 255)),
-                transform: Transform::from_xyz(0.0, 0.5, 0.0),
-                ..default()
-            },
-            right_space,
-            Controller,
-        ))
-        .id();
-
-    cmds.entity(root.single()).push_children(&[left, right]);
+    cmds.spawn((
+        Mesh3d(meshes.add(Cuboid::new(0.1, 0.1, 0.05))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
+        left_space,
+        Controller,
+    ));
+    cmds.spawn((
+        Mesh3d(meshes.add(Cuboid::new(0.1, 0.1, 0.05))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
+        right_space,
+        Controller,
+    ));
 }
 
 #[derive(Component)]

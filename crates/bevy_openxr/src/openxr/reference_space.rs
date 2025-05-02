@@ -7,7 +7,7 @@ use bevy_mod_xr::{
     spaces::{XrPrimaryReferenceSpace, XrReferenceSpace},
 };
 
-use crate::{init::create_xr_session, session::OxrSession};
+use crate::session::OxrSession;
 
 pub struct OxrReferenceSpacePlugin {
     pub default_primary_ref_space: openxr::ReferenceSpaceType,
@@ -20,17 +20,9 @@ impl Default for OxrReferenceSpacePlugin {
     }
 }
 
-/// Resource specifying what the type should be for [`OxrPrimaryReferenceSpace`]. Set through [`OxrReferenceSpacePlugin`].
+/// Resource specifying what the type should used be for the [`XrPrimaryReferenceSpace`]. Set through [`OxrReferenceSpacePlugin`].
 #[derive(Resource)]
 struct OxrDefaultPrimaryReferenceSpaceType(openxr::ReferenceSpaceType);
-
-/// The Default Reference space used for locating things
-// #[derive(Resource, Deref, ExtrctResource, Clone)]
-// pub struct OxrPrimaryReferenceSpace(pub Arc<openxr::Space>);
-
-/// The Reference space used for locating spaces on this entity
-#[derive(Component)]
-pub struct OxrReferenceSpace(pub openxr::Space);
 
 impl Plugin for OxrReferenceSpacePlugin {
     fn build(&self, app: &mut App) {

@@ -3,12 +3,16 @@ use bevy::{
     render::{extract_component::ExtractComponent, extract_resource::ExtractResource},
 };
 
+use crate::session::XrTracker;
+
 /// Any Spaces will be invalid after the owning session exits
 #[repr(transparent)]
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Reflect, Debug, Component, ExtractComponent)]
+#[derive(Component, Clone, Copy, Hash, PartialEq, Eq, Reflect, Debug, ExtractComponent)]
+#[require(XrSpaceLocationFlags, Transform, Visibility, XrTracker)]
 pub struct XrSpace(u64);
 
-#[derive(Clone, Copy, Reflect, Debug, Component, ExtractComponent, Default)]
+#[derive(Component, Clone, Copy, Reflect, Debug, ExtractComponent, Default)]
+#[require(XrSpaceVelocityFlags)]
 pub struct XrVelocity {
     /// Velocity of a space relative to it's reference space
     pub linear: Vec3,
@@ -41,6 +45,22 @@ pub struct XrReferenceSpace(pub XrSpace);
     Clone, Copy, Hash, PartialEq, Eq, Reflect, Debug, Resource, Deref, DerefMut, ExtractResource,
 )]
 pub struct XrPrimaryReferenceSpace(pub XrReferenceSpace);
+
+#[derive(
+    Clone, Copy, Hash, PartialEq, Eq, Reflect, Debug, Component, ExtractComponent, Default,
+)]
+pub struct XrSpaceLocationFlags {
+    pub position_tracked: bool,
+    pub rotation_tracked: bool,
+}
+
+#[derive(
+    Clone, Copy, Hash, PartialEq, Eq, Reflect, Debug, Component, ExtractComponent, Default,
+)]
+pub struct XrSpaceVelocityFlags {
+    pub linear_valid: bool,
+    pub angular_valid: bool,
+}
 
 impl XrSpace {
     /// # Safety

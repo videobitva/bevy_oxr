@@ -1,9 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
-use bevy::render::extract_resource::ExtractResource;
 use bevy::render::extract_resource::ExtractResourcePlugin;
 use bevy::render::renderer::RenderAdapter;
 use bevy::render::renderer::RenderAdapterInfo;
@@ -15,6 +13,7 @@ use bevy::render::settings::RenderCreation;
 use bevy::render::MainWorld;
 use bevy::render::Render;
 use bevy::render::RenderApp;
+use bevy::render::RenderDebugFlags;
 use bevy::render::RenderPlugin;
 use bevy::winit::UpdateMode;
 use bevy::winit::WinitSettings;
@@ -22,14 +21,16 @@ use bevy_mod_xr::session::*;
 use openxr::Event;
 
 use crate::error::OxrError;
-use crate::features::overlay::OxrOverlaySessionEvent;
 use crate::graphics::*;
 use crate::resources::*;
 use crate::session::OxrSession;
 use crate::session::OxrSessionCreateNextChain;
+use crate::types::Result as OxrResult;
 use crate::types::*;
 
 use super::exts::OxrEnabledExtensions;
+use super::poll_events::OxrEventHandlerExt;
+use super::poll_events::OxrEventIn;
 
 pub fn session_started(started: Option<Res<OxrSessionStarted>>) -> bool {
     started.is_some_and(|started| started.0)
@@ -63,6 +64,7 @@ pub struct OxrInitPlugin {
     pub resolutions: Option<Vec<UVec2>>,
     /// Passed into the render plugin when added to the app.
     pub synchronous_pipeline_compilation: bool,
+    pub render_debug_flags: RenderDebugFlags,
 }
 impl Default for OxrInitPlugin {
     fn default() -> Self {
@@ -74,11 +76,12 @@ impl Default for OxrInitPlugin {
                 exts.enable_hand_tracking();
                 exts
             },
-            blend_modes: default(),
+            blend_modes: Some(vec![openxr::EnvironmentBlendMode::OPAQUE]),
             backends: default(),
             formats: Some(vec![wgpu::TextureFormat::Rgba8UnormSrgb]),
             resolutions: default(),
-            synchronous_pipeline_compilation: default(),
+            synchronous_pipeline_compilation: false,
+            render_debug_flags: default(),
         }
     }
 }
@@ -105,39 +108,37 @@ impl Plugin for OxrInitPlugin {
                                 RenderInstance(Arc::new(WgpuWrapper::new(wgpu_instance))),
                             ),
                             synchronous_pipeline_compilation: self.synchronous_pipeline_compilation,
+                            debug_flags: self.render_debug_flags,
                         },
                         ExtractResourcePlugin::<OxrSessionStarted>::default(),
                     ))
-                    .add_systems(
-                        XrFirst,
-                        poll_events
-                            .in_set(XrHandleEvents::Poll)
-                            .run_if(not(state_equals(XrState::Unavailable))),
-                    )
+                    .add_oxr_event_handler(handle_events)
                     .add_systems(
                         XrFirst,
                         (
                             create_xr_session
                                 .run_if(state_equals(XrState::Available))
-                                .run_if(on_event::<XrCreateSessionEvent>()),
+                                .run_if(on_event::<XrCreateSessionEvent>),
                             (
                                 destroy_xr_session,
                                 (|v: Res<XrDestroySessionRender>| {
                                     v.0.store(true, Ordering::Relaxed);
-                                    info!("setting destroy render session");
+                                    debug!("setting destroy render session");
                                 }),
                             )
+                                .chain()
                                 .run_if(state_matches!(XrState::Exiting { .. }))
-                                .run_if(on_event::<XrDestroySessionEvent>()),
+                                .run_if(on_event::<XrDestroySessionEvent>),
                             begin_xr_session
                                 .run_if(state_equals(XrState::Ready))
-                                .run_if(on_event::<XrBeginSessionEvent>()),
+                                .run_if(on_event::<XrBeginSessionEvent>),
                             end_xr_session
                                 .run_if(state_equals(XrState::Stopping))
-                                .run_if(on_event::<XrEndSessionEvent>()),
+                                .run_if(on_event::<XrEndSessionEvent>),
                             request_exit_xr_session
                                 .run_if(session_created)
-                                .run_if(on_event::<XrRequestExitEvent>()),
+                                .run_if(on_event::<XrRequestExitEvent>),
+                            detect_session_destroyed,
                         )
                             .in_set(XrHandleEvents::SessionStateUpdateEvents),
                     )
@@ -151,9 +152,6 @@ impl Plugin for OxrInitPlugin {
                     .insert_resource(OxrSessionStarted(false))
                     .insert_non_send_resource(session_create_info)
                     .init_non_send_resource::<OxrSessionCreateNextChain>();
-
-                app.world_mut()
-                    .spawn((SpatialBundle::default(), XrTrackingRoot));
 
                 app.world_mut()
                     .resource_mut::<Events<XrStateChanged>>()
@@ -179,22 +177,41 @@ impl Plugin for OxrInitPlugin {
     fn finish(&self, app: &mut App) {
         app.sub_app_mut(RenderApp).add_systems(
             Render,
-            (destroy_xr_session, |v: Res<XrDestroySessionRender>| {
-                v.0.store(false, Ordering::Relaxed)
-            })
+            (
+                destroy_xr_session,
+                |v: Res<XrDestroySessionRender>, mut cmds: Commands| {
+                    v.0.store(false, Ordering::Relaxed);
+                    cmds.insert_resource(XrState::Available);
+                },
+            )
+                .chain()
                 .run_if(
                     resource_exists::<XrDestroySessionRender>
-                        .and_then(|v: Res<XrDestroySessionRender>| v.0.load(Ordering::Relaxed)),
-                )
-                .chain(),
+                        .and(|v: Res<XrDestroySessionRender>| v.0.load(Ordering::Relaxed)),
+                ),
         );
     }
+}
+
+fn detect_session_destroyed(
+    mut last_state: Local<bool>,
+    state: Res<XrDestroySessionRender>,
+    mut sender: EventWriter<XrSessionDestroyedEvent>,
+    mut cmds: Commands,
+) {
+    let state = state.0.load(Ordering::Relaxed);
+    if *last_state && !state {
+        debug!("XrSession was fully destroyed!");
+        sender.write_default();
+        cmds.insert_resource(XrState::Available);
+    }
+    *last_state = state;
 }
 
 impl OxrInitPlugin {
     fn init_xr(
         &self,
-    ) -> Result<(
+    ) -> OxrResult<(
         OxrInstance,
         OxrSystemId,
         WgpuGraphics,
@@ -284,65 +301,46 @@ impl OxrInitPlugin {
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct OxrInteractionProfileChanged;
 
-/// Polls any OpenXR events and handles them accordingly
-pub fn poll_events(
-    instance: Res<OxrInstance>,
+pub fn handle_events(
+    event: OxrEventIn,
     mut status: ResMut<XrState>,
     mut changed_event: EventWriter<XrStateChanged>,
     mut interaction_profile_changed_event: EventWriter<OxrInteractionProfileChanged>,
-    mut overlay_writer: Option<ResMut<Events<OxrOverlaySessionEvent>>>,
 ) {
-    let _span = info_span!("xr_poll_events");
-    let mut buffer = Default::default();
-    while let Some(event) = instance
-        .poll_event(&mut buffer)
-        .expect("Failed to poll event")
-    {
-        use openxr::Event::*;
-        match event {
-            SessionStateChanged(state) => {
-                use openxr::SessionState;
+    use openxr::Event::*;
+    match *event {
+        SessionStateChanged(state) => {
+            use openxr::SessionState;
 
-                let state = state.state();
+            let state = state.state();
 
-                info!("entered XR state {:?}", state);
+            info!("entered XR state {:?}", state);
 
-                let new_status = match state {
-                    SessionState::IDLE => XrState::Idle,
-                    SessionState::READY => XrState::Ready,
-                    SessionState::SYNCHRONIZED | SessionState::VISIBLE | SessionState::FOCUSED => {
-                        XrState::Running
-                    }
-                    SessionState::STOPPING => XrState::Stopping,
-                    SessionState::EXITING => XrState::Exiting {
-                        should_restart: false,
-                    },
-                    SessionState::LOSS_PENDING => XrState::Exiting {
-                        should_restart: true,
-                    },
-                    _ => unreachable!(),
-                };
-                changed_event.send(XrStateChanged(new_status));
-                *status = new_status;
-            }
-            InstanceLossPending(_) => {}
-            EventsLost(e) => warn!("lost {} XR events", e.lost_event_count()),
-            MainSessionVisibilityChangedEXTX(d) => {
-                if let Some(writer) = overlay_writer.as_mut() {
-                    writer.send(OxrOverlaySessionEvent::MainSessionVisibilityChanged {
-                        visible: d.visible(),
-                        flags: d.flags(),
-                    });
-                } else {
-                    warn!("Overlay Event Recieved without the OverlayPlugin being added!");
+            let new_status = match state {
+                SessionState::IDLE => XrState::Idle,
+                SessionState::READY => XrState::Ready,
+                SessionState::SYNCHRONIZED | SessionState::VISIBLE | SessionState::FOCUSED => {
+                    XrState::Running
                 }
-            }
-            // we might want to check if this is the correct session?
-            Event::InteractionProfileChanged(_) => {
-                interaction_profile_changed_event.send_default();
-            }
-            _ => {}
+                SessionState::STOPPING => XrState::Stopping,
+                SessionState::EXITING => XrState::Exiting {
+                    should_restart: false,
+                },
+                SessionState::LOSS_PENDING => XrState::Exiting {
+                    should_restart: true,
+                },
+                _ => unreachable!(),
+            };
+            changed_event.write(XrStateChanged(new_status));
+            *status = new_status;
         }
+        InstanceLossPending(_) => {}
+        EventsLost(e) => warn!("lost {} XR events", e.lost_event_count()),
+        // we might want to check if this is the correct session?
+        Event::InteractionProfileChanged(_) => {
+            interaction_profile_changed_event.write_default();
+        }
+        _ => {}
     }
 }
 
@@ -357,7 +355,7 @@ fn init_xr_session(
         resolutions,
         graphics_info,
     }: SessionConfigInfo,
-) -> Result<(
+) -> OxrResult<(
     OxrSession,
     OxrFrameWaiter,
     OxrFrameStream,
@@ -463,7 +461,7 @@ fn init_xr_session(
     } else {
         available_blend_modes.first().copied()
     }
-    .ok_or(OxrError::NoAvailableBackend)?;
+    .ok_or(OxrError::NoAvailableBlendMode)?;
 
     let graphics_info = OxrGraphicsInfo {
         blend_mode,
@@ -491,7 +489,7 @@ pub fn create_xr_session(world: &mut World) {
     let system_id = world.resource::<OxrSystemId>();
     match init_xr_session(
         device.wgpu_device(),
-        &instance,
+        instance,
         **system_id,
         &mut chain,
         create_info.clone(),
@@ -499,8 +497,8 @@ pub fn create_xr_session(world: &mut World) {
         Ok((session, frame_waiter, frame_stream, swapchain, images, graphics_info)) => {
             world.insert_resource(session.clone());
             world.insert_resource(frame_waiter);
-            world.insert_resource(images.clone());
-            world.insert_resource(graphics_info.clone());
+            world.insert_resource(images);
+            world.insert_resource(graphics_info);
             world.insert_resource(OxrRenderResources {
                 session,
                 frame_stream,
@@ -535,12 +533,13 @@ pub fn begin_xr_session(
     world: &mut World,
     // session: Res<OxrSession>, mut session_started: ResMut<OxrSessionStarted>
 ) {
-    let _span = info_span!("xr_begin_session");
+    let _span = debug_span!("xr_begin_session").entered();
     world
         .get_resource::<OxrSession>()
         .unwrap()
         .begin(openxr::ViewConfigurationType::PRIMARY_STEREO)
         .expect("Failed to begin session");
+    drop(_span);
     world.get_resource_mut::<OxrSessionStarted>().unwrap().0 = true;
     world.run_schedule(XrPostSessionBegin);
 }
@@ -551,7 +550,7 @@ pub fn end_xr_session(
 ) {
     // Maybe this could be an event?
     world.run_schedule(XrPreSessionEnd);
-    let _span = info_span!("xr_end_session");
+    let _span = debug_span!("xr_end_session").entered();
     world
         .get_resource::<OxrSession>()
         .unwrap()
