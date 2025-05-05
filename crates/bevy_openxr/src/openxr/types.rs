@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::error::OxrError;
-use crate::graphics::{GraphicsExt, GraphicsType, GraphicsWrap};
+use crate::graphics::GraphicsExt;
 
 pub use crate::openxr::exts::OxrExtensions;
 
@@ -86,13 +86,4 @@ impl<G: GraphicsExt> TryFrom<SwapchainCreateInfo> for openxr::SwapchainCreateInf
             mip_count: value.mip_count,
         })
     }
-}
-
-/// Info needed to create a session. Mostly contains graphics info.
-/// This is an API agnostic version of [openxr::Graphics::SessionCreateInfo] used for some of this library's functions
-#[derive(Clone)]
-pub struct SessionCreateInfo(pub GraphicsWrap<Self>);
-
-impl GraphicsType for SessionCreateInfo {
-    type Inner<G: GraphicsExt> = G::SessionCreateInfo;
 }

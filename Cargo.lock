@@ -890,13 +890,12 @@ dependencies = [
 
 [[package]]
 name = "bevy_mod_openxr"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "android_system_properties",
  "ash",
  "bevy",
  "bevy_mod_xr",
- "bevy_xr_utils",
  "jni 0.20.0",
  "ndk-context",
  "openxr",
@@ -919,17 +918,18 @@ dependencies = [
 
 [[package]]
 name = "bevy_mod_xr"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bevy",
 ]
 
 [[package]]
 name = "bevy_openxr_android"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_mod_openxr",
+ "bevy_mod_xr",
  "bevy_xr_utils",
  "reqwest",
  "zip",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "bevy_xr_utils"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_mod_openxr",
